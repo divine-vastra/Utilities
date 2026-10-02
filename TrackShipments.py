@@ -291,6 +291,7 @@ def archive_rows(wb, ws, row_numbers: list[int]) -> None:
         ws.delete_rows(r)
 
 async def run():
+    start_time = time.perf_counter()
     try:
         wb = openpyxl.load_workbook(EXCEL_FILE)
     except Exception as e:
@@ -412,7 +413,7 @@ async def run():
 
     wb.save(EXCEL_FILE)
     print(f"\n{'='*60}")
-    print(f"  Done. {updated_count}/{total_rows} shipments updated. WhatsApp sent: {wa_sent_count}")
+    print(f"  Done. {updated_count}/{total_rows} shipments updated. WhatsApp sent: {wa_sent_count}. Time taken: {(time.perf_counter() - start_time) / 60:.1f} min")
     print(f"{'='*60}\n")
 
 if __name__ == "__main__":
