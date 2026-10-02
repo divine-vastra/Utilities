@@ -1,4 +1,4 @@
-Shipments.xlsx
+*.xlsx
 Dispatched_Order_Report.xlsx
 .env
 __pycache__
