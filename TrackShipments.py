@@ -8,6 +8,8 @@ import json
 import re
 import os
 from pathlib import Path
+from copy import copy
+from openpyxl.utils import get_column_letter
 from whatsapp_CloudAPISender import WhatsAppCloudAPI
 
 def load_env_file(path: Path) -> None:
@@ -66,6 +68,7 @@ WA_LANG           = "en"
 WA_FIXED_CP_ID    = "105"
 OFD_STATUS        = "out for delivery"
 DELIVERED_STATUS  = "delivered"
+ARCHIVE_SHEET     = "Delivered Earlier"  # delivered rows are moved here from Sheet1
 # ──────────────────────────────────────────────────────────────────────────────
 
 # def build_url(awb: str, cp_id: str) -> str:
@@ -252,6 +255,41 @@ def send_whatsapp(client, template: str, phone: str, awb: str) -> bool:
         print(f"    ⚠ WhatsApp failed for {phone} (AWB {awb}): {e}")
         return False
 
+def archive_rows(wb, ws, row_numbers: list[int]) -> None:
+    """Cut the given rows (ascending row numbers) from ws and append them, with formatting,
+    to the bottom of the ARCHIVE_SHEET tab in the same order. Creates the tab if missing."""
+    if not row_numbers:
+        return
+    max_col = ws.max_column
+
+    if ARCHIVE_SHEET in wb.sheetnames:
+        arc = wb[ARCHIVE_SHEET]
+    else:
+        arc = wb.create_sheet(ARCHIVE_SHEET)
+        for c in range(1, max_col + 1):  # new tab: copy header row + column widths
+            src, dst = ws.cell(1, c), arc.cell(1, c)
+            dst.value = src.value
+            if src.has_style:
+                dst._style = copy(src._style)
+            letter = get_column_letter(c)
+            if letter in ws.column_dimensions:
+                arc.column_dimensions[letter].width = ws.column_dimensions[letter].width
+
+    for r in row_numbers:  # copy all first, delete afterwards
+        target = arc.max_row + 1
+        for c in range(1, max_col + 1):
+            src, dst = ws.cell(r, c), arc.cell(target, c)
+            dst.value = src.value
+            if src.has_style:
+                dst._style = copy(src._style)
+            if src.hyperlink:
+                dst.hyperlink = src.hyperlink.target or src.hyperlink.location
+        if ws.row_dimensions[r].height:
+            arc.row_dimensions[target].height = ws.row_dimensions[r].height
+
+    for r in sorted(row_numbers, reverse=True):  # reverse so earlier row numbers stay valid
+        ws.delete_rows(r)
+
 async def run():
     try:
         wb = openpyxl.load_workbook(EXCEL_FILE)
@@ -265,6 +303,7 @@ async def run():
     updated_count = 0
     total_rows = 0
     wa_sent_count = 0
+    rows_to_archive = []  # delivered rows, moved to ARCHIVE_SHEET after the loop
 
     for col, header in ((COL_WA_OFD, "WA OFD Sent"),
                         (COL_WA_DISPATCHED, "WA Dispatched Sent"),
@@ -356,9 +395,20 @@ async def run():
                     except Exception as e:
                         print(f"    [WARN] Could not save after send (is the Excel file open?): {e}")
 
+            # Delivered rows move to the archive tab regardless of WhatsApp outcome (no retry)
+            if is_delivered(new["status"]):
+                rows_to_archive.append(r)
+
             await asyncio.sleep(2)
 
         await browser.close()
+
+    if rows_to_archive:
+        if DRY_RUN:
+            print(f"  [DRY_RUN] Would move {len(rows_to_archive)} delivered row(s) to '{ARCHIVE_SHEET}'")
+        else:
+            archive_rows(wb, ws, rows_to_archive)
+            print(f"  Moved {len(rows_to_archive)} delivered row(s) to '{ARCHIVE_SHEET}'")
 
     wb.save(EXCEL_FILE)
     print(f"\n{'='*60}")
