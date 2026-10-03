@@ -11,7 +11,7 @@ Pipeline: `Updateshipments.py` appends new dispatched orders â†’ `TrackShip
 ## Run
 ```powershell
 cd c:\DV\Utilities
-pip install gspread openpyxl playwright   # then: playwright install chromium
+pip install -r requirements.txt           # then: playwright install chromium
 python TrackShipments.py                  # runs forever (poll loop)
 ```
 One-off run, or a dry run without editing the file:

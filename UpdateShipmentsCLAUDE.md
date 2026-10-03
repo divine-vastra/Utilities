@@ -8,7 +8,7 @@ Takes the daily courier dispatch report (`Dispatched_Order_Report.xlsx`) and app
 ## Run
 ```powershell
 cd c:\DV\Utilities
-pip install pandas openpyxl gspread
+pip install -r requirements.txt
 python Updateshipments.py
 ```
 Run from `c:\DV\Utilities` because file paths are relative to the working directory.
