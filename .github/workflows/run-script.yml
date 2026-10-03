@@ -24,7 +24,7 @@ jobs:
 
       - run: pip install -r requirements.txt
 
-      - run: python trackshipments.py
+      - run: python TrackShipments.py
         env:
           GOOGLE_CREDS_JSON: ${{ secrets.GOOGLE_CREDS_JSON }}
           SHEET_ID: ${{ secrets.SHEET_ID }}
