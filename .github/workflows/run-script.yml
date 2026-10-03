@@ -24,6 +24,8 @@ jobs:
 
       - run: pip install -r requirements.txt
 
+      - run: playwright install --with-deps chromium
+
       - run: python TrackShipments.py
         env:
           GOOGLE_CREDS_JSON: ${{ secrets.GOOGLE_CREDS_JSON }}

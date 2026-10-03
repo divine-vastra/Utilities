@@ -587,5 +587,7 @@ async def run():
 if __name__ == "__main__":
     while True:
         asyncio.run(run())
+        if os.environ.get("GITHUB_ACTIONS") == "true":  # the workflow's schedule is the loop: run once
+            break
         print(f"Sleeping {POLL_SECONDS // 60} minutes before next poll...\n")
         time.sleep(POLL_SECONDS)
