@@ -494,6 +494,8 @@ async def run():
                     print(f"  Skipping — no data returned")
                     continue
 
+                new["location"] = " ".join(str(new["location"]).split())  # drop newlines / extra whitespace
+
                 old_status = cell_str(row[COL_STATUS - 1])
 
                 if new["status"] and new["status"] != old_status:
@@ -567,6 +569,8 @@ async def run():
 
     print(f"\n{'='*60}")
     print(f"  Done. {updated_count}/{total_rows} shipments updated. WhatsApp sent: {wa_sent_count}. Time taken: {(time.perf_counter() - start_time) / 60:.1f} min")
+    print(f"  Finished at — {datetime.now().strftime('%Y-%m-%d %H:%M:%S')} ")
+        
     print(f"{'='*60}\n")
 
 if __name__ == "__main__":

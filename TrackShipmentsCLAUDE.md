@@ -85,6 +85,7 @@ Headers for Q/R/S are created if blank. Changing the layout means updating the `
 - Tested on 2026-10-03:
   - Dry run over 37 shipments in about 5.7 min: scraping, WhatsApp-event detection and phone normalisation all worked.
   - Live archive test: 4 delivered rows were copied to `Delivered Earlier` and deleted from `Sheet1`, with no blank rows left.
+- Scraped `location` now has newlines and repeated whitespace collapsed to single spaces before it is written (applied right after the scrape in `run()`). Remark/status are unchanged.
 - Real WhatsApp sending through the Google Sheet backend has **not** been run end to end.
 
 ## Known gotchas
