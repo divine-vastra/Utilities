@@ -68,7 +68,7 @@ COL_WA_DELIVERED  = 19  # S: Timestamp when Order-Delivered WhatsApp was sent
 
 
 # ─── WHATSAPP CONFIG ──────────────────────────────────────────────────────────
-DRY_RUN           = False          # True = only log what would be sent; nothing is sent or marked
+DRY_RUN           = os.environ.get("DRY_RUN", "false").strip().lower() in ("1", "true", "yes", "on")  # True = only log what would be sent; nothing is sent or marked
 WA_TOKEN          = os.environ.get("WA_TOKEN", "")
 WA_PHONE_NUMBER_ID = os.environ.get("WA_PHONE_NUMBER_ID", "")
 WA_TEMPLATE_NAME  = "out_for_delivery"
