@@ -33,7 +33,7 @@ Rows with no AWB are dropped, and duplicate AWBs within the report are dropped.
 | 1 | Customer Name |
 | 2 | AWB (numeric via `to_num`; stays text if it has letters, e.g. DTDC `7D137810927`) |
 | 3 | Courier Partner (stored in the "CP_ID" column) |
-| 4–9 | Blank (filled by other processes, e.g. `TrackShipments.py` — verify before changing) |
+| 4–9 | Blank (filled by `TrackShipments.py`: status, location, remark, last-scan time, last-checked time, EDD) |
 | 10 | Track Link, with `https://shopdeck.clickpost.ai/` replaced by `https://track.clickpost.in/` |
 | 11 | Dispatch date as `YYYY-MM-DD` (source format `%d/%m/%Y  %H:%M`, two spaces before the time) |
 | 12 | Address: last two comma-separated parts, minus the last 9 characters (intended to strip the pincode) |
@@ -62,10 +62,10 @@ Rows with no AWB are dropped, and duplicate AWBs within the report are dropped.
 - Dedup is by AWB only, so an AWB already in the sheet is never updated, even if the report has changed data for it.
 - Only the AWB column (col 2) is read for dedup. If someone changes the column order in the sheet, update the `col_values(2, ...)` call and the row layout.
 - If the tab isn't called `Sheet1`, the script fails with `WorksheetNotFound`; change `SHEET_TAB`.
-- The earlier "delivered rows move to other tab" logic (see git log) lives elsewhere (likely `TrackShipments.py`) and still assumes this column layout. Check it before changing the layout.
+- `TrackShipments.py` reads and writes the same sheet and depends on this column layout (cols 4–9 and 17–19 are its columns). Check it before changing the layout. Its archiving **deletes** delivered rows from `Sheet1`, so no blank rows are left; keep appending with `append_rows` (never write to a fixed row number).
 
 ## Related files in `c:\DV\Utilities`
-- `TrackShipments.py` — tracking and status updates for shipments (still based on the local Excel at the time of writing; check whether it needs the same Google Sheets migration).
+- `TrackShipments.py` — tracks every shipment in the same Google Sheet, writes status columns, sends WhatsApp messages and archives delivered rows to the "Delivered Earlier" tab. Documented in [TrackShipmentsCLAUDE.md](TrackShipmentsCLAUDE.md).
 - `whatsapp_CloudAPISender.py` — WhatsApp Cloud API sender.
 - `.env` — secrets (git-ignored).
 

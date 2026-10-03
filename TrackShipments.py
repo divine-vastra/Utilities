@@ -10,6 +10,8 @@ import os
 from pathlib import Path
 from copy import copy
 from openpyxl.utils import get_column_letter
+import gspread
+from gspread.utils import rowcol_to_a1
 from whatsapp_CloudAPISender import WhatsAppCloudAPI
 
 def load_env_file(path: Path) -> None:
@@ -35,8 +37,16 @@ load_env_file(Path(__file__).resolve().parent / ".env")
 
 
 # ─── CONFIG ───────────────────────────────────────────────────────────────────
+BACKEND      = "gsheet"          # "gsheet" = Google Sheet, "excel" = local EXCEL_FILE
 EXCEL_FILE   = "shipments.xlsx"
 POLL_SECONDS = 3600  # 60 minutes between full runs
+
+# Google Sheet backend (same sheet that Updateshipments.py appends to)
+SHEET_ID  = "1mFvlvN0wIF9sTIPJrldAoyBfolS1rodzUqG_gDtG1hQ"
+SHEET_TAB = "Sheet1"
+SERVICE_ACCOUNT_FILE = os.environ.get(
+    "GOOGLE_SERVICE_ACCOUNT_FILE", str(Path(__file__).resolve().parent / "service_account.json"))
+NCOLS = 19  # columns A..S are loaded into memory
 
 # Excel column positions (1-based)
 COL_CUSTOMER_NAME = 1   # A: Customer Name         ← NEW
@@ -290,27 +300,161 @@ def archive_rows(wb, ws, row_numbers: list[int]) -> None:
     for r in sorted(row_numbers, reverse=True):  # reverse so earlier row numbers stay valid
         ws.delete_rows(r)
 
+def cell_str(v) -> str:
+    """Cell value -> trimmed string ('' for blank; whole floats lose the '.0')."""
+    if v is None or v == "":
+        return ""
+    if isinstance(v, float) and v.is_integer():
+        v = int(v)
+    return str(v).strip()
+
+def _retry(fn, *args, **kwargs):
+    """Call a gspread function, waiting and retrying on quota (429) / transient errors."""
+    for attempt in range(5):
+        try:
+            return fn(*args, **kwargs)
+        except gspread.exceptions.APIError as e:
+            code = e.response.status_code
+            if code in (429, 500, 503) and attempt < 4:
+                wait = 30 * (attempt + 1)
+                print(f"    [WARN] Google Sheets API error {code} — retrying in {wait}s")
+                time.sleep(wait)
+            else:
+                raise
+
+def _pad(rows: list[list]) -> list[list]:
+    return [list(r) + [""] * (NCOLS - len(r)) if len(r) < NCOLS else list(r[:NCOLS]) for r in rows]
+
+class ExcelStore:
+    """Local Excel backend. Saved after every WhatsApp send (crash-safe)."""
+    save_after_send = True
+
+    def __init__(self):
+        try:
+            self.wb = openpyxl.load_workbook(EXCEL_FILE)
+        except Exception as e:
+            print(f"ERROR: Could not read '{EXCEL_FILE}' — {e}")
+            sys.exit(1)
+        self.ws = self.wb["Sheet1"]
+
+    def load(self) -> list[list]:
+        rows = [["" if v is None else v for v in r]
+                for r in self.ws.iter_rows(min_row=1, max_col=NCOLS, values_only=True)]
+        return _pad(rows)
+
+    def flush(self, dirty: dict) -> None:
+        for (r, c), v in dirty.items():
+            self.ws.cell(row=r, column=c).value = v
+        self.wb.save(EXCEL_FILE)
+
+    def archive(self, row_numbers: list[int], awbs: set) -> None:
+        archive_rows(self.wb, self.ws, row_numbers)
+        self.wb.save(EXCEL_FILE)
+
+class GSheetStore:
+    """Google Sheet backend. Changes are written in one batch at the end of the run."""
+    save_after_send = False
+
+    def __init__(self):
+        if not os.path.exists(SERVICE_ACCOUNT_FILE):
+            print(f"ERROR: File not found — '{SERVICE_ACCOUNT_FILE}'")
+            sys.exit(1)
+        try:
+            self.sh = gspread.service_account(filename=SERVICE_ACCOUNT_FILE).open_by_key(SHEET_ID)
+            self.ws = self.sh.worksheet(SHEET_TAB)
+        except Exception as e:
+            print(f"ERROR: Could not open Google Sheet — {e}")
+            sys.exit(1)
+
+    def _values(self) -> list[list]:
+        return _retry(self.ws.get_all_values, value_render_option="UNFORMATTED_VALUE")
+
+    def load(self) -> list[list]:
+        rows = _pad(self._values())
+        return rows or [[""] * NCOLS]
+
+    def flush(self, dirty: dict) -> None:
+        by_row: dict[int, list[int]] = {}
+        for (r, c) in dirty:
+            by_row.setdefault(r, []).append(c)
+        data = []
+        for r, cols in by_row.items():
+            cols.sort()
+            start = prev = cols[0]
+            run = [start]
+            for c in cols[1:] + [None]:
+                if c is not None and c == prev + 1:
+                    run.append(c)
+                    prev = c
+                    continue
+                data.append({"range": f"{rowcol_to_a1(r, run[0])}:{rowcol_to_a1(r, run[-1])}",
+                             "values": [[dirty[(r, k)] for k in run]]})
+                if c is not None:
+                    run, prev = [c], c
+        for i in range(0, len(data), 400):
+            _retry(self.ws.batch_update, data[i:i + 400], value_input_option="RAW")
+
+    def archive(self, row_numbers: list[int], awbs: set) -> None:
+        """Copy delivered rows (values + formatting) to ARCHIVE_SHEET, then delete them from
+        Sheet1, in one atomic request. Rows are re-located by AWB in case the sheet changed
+        (e.g. Updateshipments.py appended rows) while the scrape was running."""
+        fresh = self._values()
+        rows = [i + 1 for i, row in enumerate(fresh)
+                if i > 0 and len(row) > 1 and cell_str(row[1]) in awbs]
+        if not rows:
+            return
+        ws = self.ws
+        try:
+            arc = self.sh.worksheet(ARCHIVE_SHEET)
+        except gspread.exceptions.WorksheetNotFound:
+            arc = _retry(self.sh.add_worksheet, title=ARCHIVE_SHEET, rows=len(rows) + 100, cols=ws.col_count)
+        if arc.col_count < ws.col_count:
+            _retry(arc.add_cols, ws.col_count - arc.col_count)
+
+        def copy_req(src_row: int, dst_row: int) -> dict:
+            return {"copyPaste": {
+                "source": {"sheetId": ws.id, "startRowIndex": src_row - 1, "endRowIndex": src_row,
+                           "startColumnIndex": 0, "endColumnIndex": ws.col_count},
+                "destination": {"sheetId": arc.id, "startRowIndex": dst_row - 1, "endRowIndex": dst_row,
+                                "startColumnIndex": 0, "endColumnIndex": ws.col_count},
+                "pasteType": "PASTE_NORMAL"}}
+
+        requests = []
+        used = len(_retry(arc.col_values, 1))
+        if used == 0:                      # new/empty tab: copy header row first
+            requests.append(copy_req(1, 1))
+            used = 1
+        needed = used + len(rows)
+        if arc.row_count < needed:
+            _retry(arc.add_rows, needed - arc.row_count)
+        for n, r in enumerate(rows, start=1):
+            requests.append(copy_req(r, used + n))
+        for r in sorted(rows, reverse=True):  # reverse so earlier row numbers stay valid
+            requests.append({"deleteDimension": {"range": {
+                "sheetId": ws.id, "dimension": "ROWS", "startIndex": r - 1, "endIndex": r}}})
+        _retry(self.sh.batch_update, {"requests": requests})
+
 async def run():
     start_time = time.perf_counter()
-    try:
-        wb = openpyxl.load_workbook(EXCEL_FILE)
-    except Exception as e:
-        print(f"ERROR: Could not read '{EXCEL_FILE}' — {e}")
-        sys.exit(1)
+    store = GSheetStore() if BACKEND == "gsheet" else ExcelStore()
+    grid = store.load()
+    dirty: dict[tuple[int, int], object] = {}   # (row, col) -> new value, written back via store.flush
 
-    
-    ws = wb['Sheet1']
-    #ws = wb.active
+    def setc(r: int, c: int, value) -> None:
+        grid[r - 1][c - 1] = value
+        dirty[(r, c)] = value
+
     updated_count = 0
     total_rows = 0
     wa_sent_count = 0
     rows_to_archive = []  # delivered rows, moved to ARCHIVE_SHEET after the loop
+    archive_awbs = set()
 
     for col, header in ((COL_WA_OFD, "WA OFD Sent"),
                         (COL_WA_DISPATCHED, "WA Dispatched Sent"),
                         (COL_WA_DELIVERED, "WA Delivered Sent")):
-        if not ws.cell(row=1, column=col).value:
-            ws.cell(row=1, column=col).value = header
+        if not grid[0][col - 1]:
+            setc(1, col, header)
 
     wa_client = None
     if not DRY_RUN:
@@ -322,96 +466,105 @@ async def run():
         print("  *** DRY_RUN is ON — no WhatsApp messages will be sent ***")
 
     print(f"\n{'='*60}")
-    print(f"  ClickPost Page Scraper — {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+    print(f"  ClickPost Page Scraper — {datetime.now().strftime('%Y-%m-%d %H:%M:%S')} ({BACKEND})")
     print(f"{'='*60}")
 
-    async with async_playwright() as pw:
-        browser = await pw.chromium.launch(headless=True)
+    try:
+        async with async_playwright() as pw:
+            browser = await pw.chromium.launch(headless=True)
 
-        for row in ws.iter_rows(min_row=2):  # Row 1 = headers
-            customer_name = str(row[COL_CUSTOMER_NAME - 1].value).strip() if row[COL_CUSTOMER_NAME - 1].value else ""
-            awb           = str(row[COL_AWB   - 1].value).strip() if row[COL_AWB   - 1].value else None
-            cp_name         = str(row[COL_CP_NAME - 1].value).strip() if row[COL_CP_NAME - 1].value else None
-            dest          = str(row[COL_DEST - 1].value).strip() if row[COL_DEST - 1].value else None
-            order_type    = str(row[COL_ORDER_TYPE - 1].value).strip() if row[COL_ORDER_TYPE - 1].value else None
-            track_url     = str(row[COL_TRACK_URL - 1].value).strip() if row[COL_TRACK_URL - 1].value else None
+            for r in range(2, len(grid) + 1):  # Row 1 = headers
+                row = grid[r - 1]
+                customer_name = cell_str(row[COL_CUSTOMER_NAME - 1])
+                awb           = cell_str(row[COL_AWB   - 1]) or None
+                cp_name       = cell_str(row[COL_CP_NAME - 1]) or None
+                dest          = cell_str(row[COL_DEST - 1]) or None
+                order_type    = cell_str(row[COL_ORDER_TYPE - 1]) or None
+                track_url     = cell_str(row[COL_TRACK_URL - 1]) or None
 
-            if not awb or not cp_name:
-                continue
-
-            total_rows += 1
-            print(f"\n{total_rows:02}. → Customer: {customer_name or 'N/A'} | Dest: {dest} | TYPE: {order_type} | CP_NAME: {cp_name}")
-
-            new = await scrape_shipment(browser, awb, track_url)
-
-            if not new:
-                print(f"  Skipping — no data returned")
-                continue
-
-            old_status = row[COL_STATUS - 1].value or ""
-
-            if new["status"] and new["status"] != old_status:
-                print(f"    ✅ STATUS CHANGED: [{old_status}] → [{new['status']}], EDD: {new['edd']}, {new['location'][:30]} ")
-                updated_count += 1
-            else:
-                print(f"    — No change: {new['status']},  EDD: {new['edd']}, {new['location'][:30]}")
-
-            row[COL_STATUS       - 1].value = new["status"]
-            row[COL_LOCATION     - 1].value = new["location"]
-            row[COL_REMARK       - 1].value = new["remark"]
-            row[COL_TIMESTAMP    - 1].value = new["timestamp"]
-            row[COL_LAST_UPDATED - 1].value = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-            if new["edd"]:
-                row[COL_EDD - 1].value = new["edd"]
-
-            # ── WhatsApp events (each sent once per shipment, tracked by its own column) ──
-            #   blank -> non-blank  : order_dispatched
-            #   any   -> Out for Delivery : out_for_delivery
-            #   any   -> Delivered  : order_delivered
-            r = row[0].row
-            events = []
-            if not old_status.strip() and new["status"].strip():
-                events.append(("Dispatched", WA_TEMPLATE_DISPATCHED, COL_WA_DISPATCHED))
-            if is_ofd(new["status"]) and not is_ofd(old_status):
-                events.append(("OFD", WA_TEMPLATE_NAME, COL_WA_OFD))
-            if is_delivered(new["status"]) and not is_delivered(old_status):
-                events.append(("Delivered", WA_TEMPLATE_DELIVERED, COL_WA_DELIVERED))
-
-            for label, template, sent_col in events:
-                sent_cell = ws.cell(row=r, column=sent_col)
-                if sent_cell.value:
+                if not awb or not cp_name:
                     continue
-                phone = normalize_phone(ws.cell(row=r, column=COL_PHONE).value)
-                if not phone:
-                    print(f"    ⚠ {label} but phone invalid/missing in column O — will retry next poll")
-                elif DRY_RUN:
-                    button = "no components" if template == WA_TEMPLATE_DELIVERED else f"button value '{awb}&cp_id={WA_FIXED_CP_ID}'"
-                    print(f"    [DRY_RUN] Would send '{template}' to {phone} (AWB {awb}, {button})")
-                elif send_whatsapp(wa_client, template, phone, awb):
-                    sent_cell.value = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-                    wa_sent_count += 1
-                    print(f"    📲 WhatsApp '{template}' sent to {phone} (AWB {awb})")
-                    try:
-                        wb.save(EXCEL_FILE)  # persist immediately to avoid duplicates after a crash
-                    except Exception as e:
-                        print(f"    [WARN] Could not save after send (is the Excel file open?): {e}")
 
-            # Delivered rows move to the archive tab regardless of WhatsApp outcome (no retry)
-            if is_delivered(new["status"]):
-                rows_to_archive.append(r)
+                total_rows += 1
+                print(f"\n{total_rows:02}. → Customer: {customer_name or 'N/A'} | Dest: {dest} | TYPE: {order_type} | CP_NAME: {cp_name}")
 
-            await asyncio.sleep(2)
+                new = await scrape_shipment(browser, awb, track_url)
 
-        await browser.close()
+                if not new:
+                    print(f"  Skipping — no data returned")
+                    continue
+
+                old_status = cell_str(row[COL_STATUS - 1])
+
+                if new["status"] and new["status"] != old_status:
+                    print(f"    ✅ STATUS CHANGED: [{old_status}] → [{new['status']}], EDD: {new['edd']}, {new['location'][:30]} ")
+                    updated_count += 1
+                else:
+                    print(f"    — No change: {new['status']},  EDD: {new['edd']}, {new['location'][:30]}")
+
+                setc(r, COL_STATUS,       new["status"])
+                setc(r, COL_LOCATION,     new["location"])
+                setc(r, COL_REMARK,       new["remark"])
+                setc(r, COL_TIMESTAMP,    new["timestamp"])
+                setc(r, COL_LAST_UPDATED, datetime.now().strftime("%Y-%m-%d %H:%M:%S"))
+                if new["edd"]:
+                    setc(r, COL_EDD, new["edd"])
+
+                # ── WhatsApp events (each sent once per shipment, tracked by its own column) ──
+                #   blank -> non-blank  : order_dispatched
+                #   any   -> Out for Delivery : out_for_delivery
+                #   any   -> Delivered  : order_delivered
+                events = []
+                if not old_status and new["status"].strip():
+                    events.append(("Dispatched", WA_TEMPLATE_DISPATCHED, COL_WA_DISPATCHED))
+                if is_ofd(new["status"]) and not is_ofd(old_status):
+                    events.append(("OFD", WA_TEMPLATE_NAME, COL_WA_OFD))
+                if is_delivered(new["status"]) and not is_delivered(old_status):
+                    events.append(("Delivered", WA_TEMPLATE_DELIVERED, COL_WA_DELIVERED))
+
+                for label, template, sent_col in events:
+                    if row[sent_col - 1]:
+                        continue
+                    phone = normalize_phone(row[COL_PHONE - 1])
+                    if not phone:
+                        print(f"    ⚠ {label} but phone invalid/missing in column O — will retry next poll")
+                    elif DRY_RUN:
+                        button = "no components" if template == WA_TEMPLATE_DELIVERED else f"button value '{awb}&cp_id={WA_FIXED_CP_ID}'"
+                        print(f"    [DRY_RUN] Would send '{template}' to {phone} (AWB {awb}, {button})")
+                    elif send_whatsapp(wa_client, template, phone, awb):
+                        setc(r, sent_col, datetime.now().strftime("%Y-%m-%d %H:%M:%S"))
+                        wa_sent_count += 1
+                        print(f"    📲 WhatsApp '{template}' sent to {phone} (AWB {awb})")
+                        if store.save_after_send:
+                            try:
+                                store.flush(dirty)  # persist immediately to avoid duplicates after a crash
+                                dirty.clear()
+                            except Exception as e:
+                                print(f"    [WARN] Could not save after send (is the Excel file open?): {e}")
+
+                # Delivered rows move to the archive tab regardless of WhatsApp outcome (no retry)
+                if is_delivered(new["status"]):
+                    rows_to_archive.append(r)
+                    archive_awbs.add(awb)
+
+                await asyncio.sleep(2)
+
+            await browser.close()
+    finally:
+        # Always write what we have (also on Ctrl+C / crash) so sent-timestamps aren't lost
+        try:
+            store.flush(dirty)
+            dirty.clear()
+        except Exception as e:
+            print(f"ERROR: Could not save results — {e}")
 
     if rows_to_archive:
         if DRY_RUN:
             print(f"  [DRY_RUN] Would move {len(rows_to_archive)} delivered row(s) to '{ARCHIVE_SHEET}'")
         else:
-            archive_rows(wb, ws, rows_to_archive)
+            store.archive(rows_to_archive, archive_awbs)
             print(f"  Moved {len(rows_to_archive)} delivered row(s) to '{ARCHIVE_SHEET}'")
 
-    wb.save(EXCEL_FILE)
     print(f"\n{'='*60}")
     print(f"  Done. {updated_count}/{total_rows} shipments updated. WhatsApp sent: {wa_sent_count}. Time taken: {(time.perf_counter() - start_time) / 60:.1f} min")
     print(f"{'='*60}\n")
