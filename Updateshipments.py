@@ -1,5 +1,5 @@
 import pandas as pd
-from openpyxl import load_workbook
+import gspread
 from datetime import date, datetime
 import re
 import sys
@@ -7,13 +7,15 @@ import os
 
 # ── Paths ────────────────────────────────────────────────────────────────────
 DISPATCHED_FILE = "Dispatched_Order_Report.xlsx"
-SHIPMENTS_FILE  = "Shipments.xlsx"
 
-# Columns (1-indexed) that should be stored as numbers
-NUMERIC_COLS = {2, 14, 15}   # Invoice Value, Customer Number
+# Target Google Sheet (ID from the sheet URL) and the tab to append to
+SHEET_ID  = "1mFvlvN0wIF9sTIPJrldAoyBfolS1rodzUqG_gDtG1hQ"
+SHEET_TAB = "Sheet1"
+# Service-account key JSON; the sheet must be shared (Editor) with its client_email
+SERVICE_ACCOUNT_FILE = os.environ.get("GOOGLE_SERVICE_ACCOUNT_FILE", "service_account.json")
 
 # ── Validate files exist ──────────────────────────────────────────────────────
-missing = [f for f in [DISPATCHED_FILE, SHIPMENTS_FILE] if not os.path.exists(f)]
+missing = [f for f in [DISPATCHED_FILE, SERVICE_ACCOUNT_FILE] if not os.path.exists(f)]
 if missing:
     for f in missing:
         print(f"ERROR: File not found — '{f}'")
@@ -95,38 +97,35 @@ for _, row in df.iterrows():
         to_num(row["Customer Number"]), # col 15 - Customer Number (numeric)
     ])
 
-# ── Load Shipments.xlsx ───────────────────────────────────────────────────────
+# ── Open Google Sheet ─────────────────────────────────────────────────────────
 try:
-    wb = load_workbook(SHIPMENTS_FILE)
+    gc = gspread.service_account(filename=SERVICE_ACCOUNT_FILE)
+    ws = gc.open_by_key(SHEET_ID).worksheet(SHEET_TAB)
 except Exception as e:
-    print(f"ERROR: Could not read '{SHIPMENTS_FILE}' — {e}")
-    sys.exit(1)
-ws = wb['Sheet1']
-
-# Find first blank row in col A and write from there
-first_blank_row = None
-for row in ws.iter_rows(min_row=2, max_col=1):
-    cell = row[0]
-    if cell.value is None or str(cell.value).strip() == "":
-        first_blank_row = cell.row
-        break
-if first_blank_row is None:
-    first_blank_row = ws.max_row + 1
-
-# Write rows; apply number format to numeric columns
-for i, row_data in enumerate(new_rows):
-    for j, value in enumerate(row_data, start=1):
-        cell = ws.cell(row=first_blank_row + i, column=j, value=value)
-        if j in NUMERIC_COLS:
-            cell.number_format = "0"
-
-# ── Save ──────────────────────────────────────────────────────────────────────
-try:
-    wb.save(SHIPMENTS_FILE)
-except Exception as e:
-    print(f"ERROR: Could not save '{SHIPMENTS_FILE}' — {e}")
+    print(f"ERROR: Could not open Google Sheet — {e}")
     sys.exit(1)
 
-print(f"Done. Appended {len(new_rows)} rows → {SHIPMENTS_FILE}")
+# ── Skip AWBs already in the sheet (col 2) ────────────────────────────────────
+try:
+    existing = {str(to_num(v)).strip() for v in
+                ws.col_values(2, value_render_option="UNFORMATTED_VALUE")[1:] if v != ""}
+except Exception as e:
+    print(f"ERROR: Could not read existing AWBs from Google Sheet — {e}")
+    sys.exit(1)
+
+total = len(new_rows)
+new_rows = [r for r in new_rows if str(r[1]).strip() not in existing]
+print(f"Skipped {total - len(new_rows)} AWBs already in the sheet.")
+
+# ── Append ────────────────────────────────────────────────────────────────────
+# Numbers are sent as real numbers; USER_ENTERED lets Sheets parse the ISO date.
+try:
+    if new_rows:
+        ws.append_rows(new_rows, value_input_option="USER_ENTERED", table_range="A1")
+except Exception as e:
+    print(f"ERROR: Could not append to Google Sheet — {e}")
+    sys.exit(1)
+
+print(f"Done. Appended {len(new_rows)} rows → Google Sheet '{SHEET_TAB}'")
 for r in new_rows:
     print(r)
