@@ -356,11 +356,22 @@ class GSheetStore:
     save_after_send = False
 
     def __init__(self):
-        if not os.path.exists(SERVICE_ACCOUNT_FILE):
-            print(f"ERROR: File not found — '{SERVICE_ACCOUNT_FILE}'")
+        # GitHub Actions / CI: JSON key content in env GOOGLE_SERVICE_ACCOUNT_JSON (a secret).
+        # Local: key file at SERVICE_ACCOUNT_FILE.
+        sa_json = os.environ.get("GOOGLE_CREDS_JSON", "").strip()
+        try:
+            if sa_json:
+                gc = gspread.service_account_from_dict(json.loads(sa_json))
+            elif os.path.exists(SERVICE_ACCOUNT_FILE):
+                gc = gspread.service_account(filename=SERVICE_ACCOUNT_FILE)
+            else:
+                print(f"ERROR: No Google credentials — set GOOGLE_SERVICE_ACCOUNT_JSON or provide '{SERVICE_ACCOUNT_FILE}'")
+                sys.exit(1)
+        except ValueError as e:
+            print(f"ERROR: GOOGLE_SERVICE_ACCOUNT_JSON is not valid JSON — {e}")
             sys.exit(1)
         try:
-            self.sh = gspread.service_account(filename=SERVICE_ACCOUNT_FILE).open_by_key(SHEET_ID)
+            self.sh = gc.open_by_key(SHEET_ID)
             self.ws = self.sh.worksheet(SHEET_TAB)
         except Exception as e:
             print(f"ERROR: Could not open Google Sheet — {e}")

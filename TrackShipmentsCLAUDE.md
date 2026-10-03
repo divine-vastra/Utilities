@@ -25,7 +25,7 @@ Importing the module does not start the loop (guarded by `__main__`). Dry runs s
 |---|---|
 | `BACKEND` | `"gsheet"` (default) or `"excel"` (legacy local `shipments.xlsx`, kept as a switch) |
 | `SHEET_ID` / `SHEET_TAB` | `1mFvlvN0wIF9sTIPJrldAoyBfolS1rodzUqG_gDtG1hQ` / `Sheet1` |
-| `SERVICE_ACCOUNT_FILE` | env `GOOGLE_SERVICE_ACCOUNT_FILE`, else `service_account.json` next to the script. The sheet must be shared (Editor) with its `client_email`. |
+| Google credentials | Priority: env `GOOGLE_SERVICE_ACCOUNT_JSON` (the full key JSON as text, for GitHub Actions: store it as a repo secret and map it to this env var), else the key file `SERVICE_ACCOUNT_FILE` (env `GOOGLE_SERVICE_ACCOUNT_FILE`, default `service_account.json` next to the script). The sheet must be shared (Editor) with the key's `client_email`. |
 | `DRY_RUN` | Read from env var / `.env` key `DRY_RUN` (`1`/`true`/`yes`/`on` = on; unset or anything else = off). On = log what would be sent/moved; nothing is sent, nothing archived |
 | `.env` | Loaded from the script's folder by `load_env_file` (no python-dotenv). Needs `WA_TOKEN` and `WA_PHONE_NUMBER_ID`. Real env vars take priority. |
 | WhatsApp templates | `order_dispatched`, `out_for_delivery` (`WA_TEMPLATE_NAME`), `order_delivered`; language `en`; `WA_FIXED_CP_ID = "105"` |
@@ -85,6 +85,7 @@ Headers for Q/R/S are created if blank. Changing the layout means updating the `
 - Tested on 2026-10-03:
   - Dry run over 37 shipments in about 5.7 min: scraping, WhatsApp-event detection and phone normalisation all worked.
   - Live archive test: 4 delivered rows were copied to `Delivered Earlier` and deleted from `Sheet1`, with no blank rows left.
+- Credentials: `GSheetStore` now uses `GOOGLE_SERVICE_ACCOUNT_JSON` (key content) when set, otherwise the local key file, so it works in GitHub Actions without a file. `Updateshipments.py` still uses the file only.
 - `DRY_RUN` is no longer hard-coded; it is read from the `DRY_RUN` env var or `.env` (default off).
 - Scraped `location` now has newlines and repeated whitespace collapsed to single spaces before it is written (applied right after the scrape in `run()`). Remark/status are unchanged.
 - Real WhatsApp sending through the Google Sheet backend has **not** been run end to end.
