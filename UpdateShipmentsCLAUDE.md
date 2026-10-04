@@ -47,6 +47,7 @@ Rows with no AWB are dropped, and duplicate AWBs within the report are dropped.
 3. Open the sheet with `gspread.service_account(...)`.
 4. **Skip AWBs already in the sheet.** It reads column 2 with `UNFORMATTED_VALUE` and compares as text after `to_num`, which makes reruns idempotent.
 5. `append_rows(..., value_input_option="USER_ENTERED", table_range="A1")` appends below the existing data. `USER_ENTERED` makes Sheets parse the ISO date.
+5b. **Borders:** the range Sheets reports for the append (`updates.updatedRange`) is given SOLID black borders (all edges and inner lines) across columns A..`BORDER_LAST_COL` (19 = S), via an `updateBorders` request. A failure here only prints a warning; the rows are already appended.
 6. Print a skipped count, an appended count, and the appended rows.
 
 ## History / decisions
@@ -54,6 +55,7 @@ Rows with no AWB are dropped, and duplicate AWBs within the report are dropped.
 - Added the duplicate-AWB skip, because reruns on the same report previously double-appended.
 - Tested: the first run appended 11 rows (dispatch date 2026-10-01); the second run skipped all 11 and appended 0.
 - Order type logic extended (2026-10-04): added `Partial COD` when the amount to collect is non-zero but differs from the invoice value. Column M of the sheet can now hold `prepaid`, `COD` or `Partial COD`; `TrackShipments.py` only logs this value.
+- Borders (2026-10-04): appended rows arrived without cell borders, so the script now applies borders to the appended rows for columns A..S (`BORDER_LAST_COL = 19`). Only the Google Sheet needs this: the script no longer writes Excel, and `TrackShipments.py` copies formatting when archiving. Not yet verified against the live sheet.
 - The old `extract_cp_id` helper is commented out. The courier partner name is now used instead of the `cp_id` from the track link.
 - `.gitignore` covers `*.xlsx`, `.env`, `__pycache__` and `service_account.json`.
 
