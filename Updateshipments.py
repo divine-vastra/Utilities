@@ -67,9 +67,12 @@ def fix_track_link(link: str) -> str:
     
     return link.replace("https://shopdeck.clickpost.ai/", "https://track.clickpost.in/")
 
-def order_type(amount) -> str:
+def order_type(invoiceAmount, amounttoCollect) -> str:
     try:
-        return "prepaid" if float(amount) == 0 else "COD"
+        collect = float(amounttoCollect)
+        if collect == 0:
+            return "prepaid"
+        return "COD" if abs(float(invoiceAmount) - collect) < 0.005 else "Partial COD"
     except (ValueError, TypeError):
         return "prepaid"
 
@@ -92,8 +95,8 @@ for _, row in df.iterrows():
         track_fixed,                    # col 10 - Track Link
         formatted_date,                 # col 11 - Dispatch Date
         last_two_tokens(row["Customer Address"]),  # col 12 - Address
-        order_type(row["Amount to Collect"]),      # col 13 - Order Type
-        to_num(row["Invoice Value"]),   # col 14 - Invoice Value (numeric)
+        order_type(row["Invoice Value"], row["Amount to Collect"]),      # col 13 - Order Type
+        to_num(row["Amount to Collect"]),   # col 14 - Amount to Collect (numeric)
         to_num(row["Customer Number"]), # col 15 - Customer Number (numeric)
     ])
 

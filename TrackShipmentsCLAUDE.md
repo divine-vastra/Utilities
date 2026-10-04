@@ -48,7 +48,7 @@ Importing the module does not start the loop (guarded by `__main__`). Dry runs s
 | 10 J | Track URL | Updateshipments |
 | 11 K | Dispatch date | Updateshipments |
 | 12 L | Destination | Updateshipments |
-| 13 M | Order type (prepaid/COD) | Updateshipments |
+| 13 M | Order type (prepaid / COD / Partial COD) | Updateshipments |
 | 14 N | Invoice value | Updateshipments |
 | 15 O | Customer phone (10 digits; `91` is prefixed) | Updateshipments |
 | 16 P | unused | â€” |

@@ -37,7 +37,7 @@ Rows with no AWB are dropped, and duplicate AWBs within the report are dropped.
 | 10 | Track Link, with `https://shopdeck.clickpost.ai/` replaced by `https://track.clickpost.in/` |
 | 11 | Dispatch date as `YYYY-MM-DD` (source format `%d/%m/%Y  %H:%M`, two spaces before the time) |
 | 12 | Address: last two comma-separated parts, minus the last 9 characters (intended to strip the pincode) |
-| 13 | `prepaid` if Amount to Collect is 0, otherwise `COD` |
+| 13 | `order_type(invoice, collect)`: `prepaid` if Amount to Collect is 0; `COD` if it equals Invoice Value (within 0.005); otherwise `Partial COD`. Unparseable values fall back to `prepaid` |
 | 14 | Invoice Value (numeric) |
 | 15 | Customer Number (numeric) |
 
@@ -53,6 +53,7 @@ Rows with no AWB are dropped, and duplicate AWBs within the report are dropped.
 - Switched the target from local `Shipments.xlsx` (openpyxl, first blank row in col A) to Google Sheets (gspread), at the user's request.
 - Added the duplicate-AWB skip, because reruns on the same report previously double-appended.
 - Tested: the first run appended 11 rows (dispatch date 2026-10-01); the second run skipped all 11 and appended 0.
+- Order type logic extended (2026-10-04): added `Partial COD` when the amount to collect is non-zero but differs from the invoice value. Column M of the sheet can now hold `prepaid`, `COD` or `Partial COD`; `TrackShipments.py` only logs this value.
 - The old `extract_cp_id` helper is commented out. The courier partner name is now used instead of the `cp_id` from the track link.
 - `.gitignore` covers `*.xlsx`, `.env`, `__pycache__` and `service_account.json`.
 
