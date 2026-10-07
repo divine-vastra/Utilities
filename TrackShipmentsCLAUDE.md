@@ -80,6 +80,7 @@ Headers for Q/R/S are created if blank. Changing the layout means updating the `
   - `_retry` waits and retries on 429/500/503 (30 s Ã— attempt).
 
 ## History / decisions
+- Timestamps (2026-10-07): every timestamp written to the sheet (col H last-checked, Q/R/S WhatsApp-sent) and the console banner times now come from `now_ist()` (fixed UTC+5:30), so they are IST on any machine, including GitHub Actions runners (UTC).
 - Originally ran on a local `shipments.xlsx`. Migrated to the Google Sheet (same sheet as Updateshipments) on 2026-10-03 and kept an `excel` backend switch.
 - User chose **batch write at the end** (accepting the risk that a hard kill after a WhatsApp send loses the sent-timestamp and may re-send). A `finally` flush mitigates normal crashes and Ctrl+C.
 - Tested on 2026-10-03:

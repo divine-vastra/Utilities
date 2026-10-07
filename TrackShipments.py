@@ -1,7 +1,7 @@
 import asyncio
 import sys
 import openpyxl
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 from playwright.async_api import async_playwright
 import time
 import json
@@ -13,6 +13,12 @@ from openpyxl.utils import get_column_letter
 import gspread
 from gspread.utils import rowcol_to_a1
 from whatsapp_CloudAPISender import WhatsAppCloudAPI
+
+IST = timezone(timedelta(hours=5, minutes=30))
+
+def now_ist() -> str:
+    """Current time in IST as 'YYYY-MM-DD HH:MM:SS', whatever timezone the machine/runner uses."""
+    return datetime.now(IST).strftime("%Y-%m-%d %H:%M:%S")
 
 def load_env_file(path: Path) -> None:
     """Minimal .env loader (no extra package needed). Lines: KEY=VALUE, '#' comments,
@@ -477,7 +483,7 @@ async def run():
         print("  *** DRY_RUN is ON — no WhatsApp messages will be sent ***")
 
     print(f"\n{'='*60}")
-    print(f"  ClickPost Page Scraper — {datetime.now().strftime('%Y-%m-%d %H:%M:%S')} ({BACKEND})")
+    print(f"  ClickPost Page Scraper — {now_ist()} ({BACKEND})")
     print(f"{'='*60}")
 
     try:
@@ -519,7 +525,7 @@ async def run():
                 setc(r, COL_LOCATION,     new["location"])
                 setc(r, COL_REMARK,       new["remark"])
                 setc(r, COL_TIMESTAMP,    new["timestamp"])
-                setc(r, COL_LAST_UPDATED, datetime.now().strftime("%Y-%m-%d %H:%M:%S"))
+                setc(r, COL_LAST_UPDATED, now_ist())
                 if new["edd"]:
                     setc(r, COL_EDD, new["edd"])
 
@@ -545,7 +551,7 @@ async def run():
                         button = "no components" if template == WA_TEMPLATE_DELIVERED else f"button value '{awb}&cp_id={WA_FIXED_CP_ID}'"
                         print(f"    [DRY_RUN] Would send '{template}' to {phone} (AWB {awb}, {button})")
                     elif send_whatsapp(wa_client, template, phone, awb):
-                        setc(r, sent_col, datetime.now().strftime("%Y-%m-%d %H:%M:%S"))
+                        setc(r, sent_col, now_ist())
                         wa_sent_count += 1
                         print(f"    📲 WhatsApp '{template}' sent to {phone} (AWB {awb})")
                         if store.save_after_send:
@@ -580,7 +586,7 @@ async def run():
 
     print(f"\n{'='*60}")
     print(f"  Done. {updated_count}/{total_rows} shipments updated. WhatsApp sent: {wa_sent_count}. Time taken: {(time.perf_counter() - start_time) / 60:.1f} min")
-    print(f"  Finished at — {datetime.now().strftime('%Y-%m-%d %H:%M:%S')} ")
+    print(f"  Finished at — {now_ist()} ")
         
     print(f"{'='*60}\n")
 
