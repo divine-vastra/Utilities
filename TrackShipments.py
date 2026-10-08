@@ -45,7 +45,6 @@ load_env_file(Path(__file__).resolve().parent / ".env")
 # ─── CONFIG ───────────────────────────────────────────────────────────────────
 BACKEND      = "gsheet"          # "gsheet" = Google Sheet, "excel" = local EXCEL_FILE
 EXCEL_FILE   = "shipments.xlsx"
-POLL_SECONDS = 3600  # 60 minutes between full runs
 
 # Google Sheet backend (same sheet that Updateshipments.py appends to)
 SHEET_ID  = "1mFvlvN0wIF9sTIPJrldAoyBfolS1rodzUqG_gDtG1hQ"
@@ -546,7 +545,7 @@ async def run():
                         continue
                     phone = normalize_phone(row[COL_PHONE - 1])
                     if not phone:
-                        print(f"    ⚠ {label} but phone invalid/missing in column O — will retry next poll")
+                        print(f"    ⚠ {label} but phone invalid/missing in column O — will retry next run")
                     elif DRY_RUN:
                         button = "no components" if template == WA_TEMPLATE_DELIVERED else f"button value '{awb}&cp_id={WA_FIXED_CP_ID}'"
                         print(f"    [DRY_RUN] Would send '{template}' to {phone} (AWB {awb}, {button})")
@@ -591,9 +590,4 @@ async def run():
     print(f"{'='*60}\n")
 
 if __name__ == "__main__":
-    while True:
-        asyncio.run(run())
-        if os.environ.get("GITHUB_ACTIONS") == "true":  # the workflow's schedule is the loop: run once
-            break
-        print(f"Sleeping {POLL_SECONDS // 60} minutes before next poll...\n")
-        time.sleep(POLL_SECONDS)
+    asyncio.run(run())  # single run, no polling (schedule it externally)

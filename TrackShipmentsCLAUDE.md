@@ -4,7 +4,7 @@ Context for future Claude sessions working on `TrackShipments.py` in `c:\DV\Util
 Companion doc: [UpdateShipmentsCLAUDE.md](UpdateShipmentsCLAUDE.md) (the script that appends new orders to the same sheet).
 
 ## Purpose
-Polls the tracking page of every shipment in the Google Sheet, writes the latest status back, sends WhatsApp template messages on key status changes, and moves delivered rows to a "Delivered Earlier" tab. Loops forever, one full run every `POLL_SECONDS` (3600 = 60 min).
+Polls the tracking page of every shipment in the Google Sheet, writes the latest status back, sends WhatsApp template messages on key status changes, and moves delivered rows to a "Delivered Earlier" tab. Runs once and exits; repeat runs come from an external schedule (GitHub Actions or Task Scheduler).
 
 Pipeline: `Updateshipments.py` appends new dispatched orders â†’ `TrackShipments.py` tracks them, notifies customers and archives delivered ones.
 
@@ -12,7 +12,7 @@ Pipeline: `Updateshipments.py` appends new dispatched orders â†’ `TrackShip
 ```powershell
 cd c:\DV\Utilities
 pip install -r requirements.txt           # then: playwright install chromium
-python TrackShipments.py                  # runs forever (poll loop)
+python TrackShipments.py                  # one run, then exits
 ```
 One-off run, or a dry run without editing the file:
 ```powershell
@@ -66,7 +66,7 @@ Headers for Q/R/S are created if blank. Changing the layout means updating the `
    - old status blank â†’ non-blank: `order_dispatched` (tracking-link button)
    - status becomes "Out for Delivery": `out_for_delivery` (tracking-link button)
    - status becomes "Delivered": `order_delivered` (no components)
-   - Button value is `{awb}&cp_id=105`. An invalid or missing phone logs a warning and retries on the next poll.
+   - Button value is `{awb}&cp_id=105`. An invalid or missing phone logs a warning and retries on the next run.
 5. Delivered rows are collected for archiving **regardless of whether the WhatsApp send succeeded** (no retry).
 6. `finally:` always flushes `dirty` to the backend (also on Ctrl+C or a crash).
 7. Archive step: `store.archive(rows, awbs)`, skipped in dry run.
@@ -80,6 +80,7 @@ Headers for Q/R/S are created if blank. Changing the layout means updating the `
   - `_retry` waits and retries on 429/500/503 (30 s Ã— attempt).
 
 ## History / decisions
+- No polling (2026-10-08): removed the `while True` loop, `POLL_SECONDS` and the sleep; `__main__` now just runs `run()` once, locally and on GitHub Actions alike.
 - Timestamps (2026-10-07): every timestamp written to the sheet (col H last-checked, Q/R/S WhatsApp-sent) and the console banner times now come from `now_ist()` (fixed UTC+5:30), so they are IST on any machine, including GitHub Actions runners (UTC).
 - Originally ran on a local `shipments.xlsx`. Migrated to the Google Sheet (same sheet as Updateshipments) on 2026-10-03 and kept an `excel` backend switch.
 - User chose **batch write at the end** (accepting the risk that a hard kill after a WhatsApp send loses the sent-timestamp and may re-send). A `finally` flush mitigates normal crashes and Ctrl+C.
@@ -87,7 +88,7 @@ Headers for Q/R/S are created if blank. Changing the layout means updating the `
   - Dry run over 37 shipments in about 5.7 min: scraping, WhatsApp-event detection and phone normalisation all worked.
   - Live archive test: 4 delivered rows were copied to `Delivered Earlier` and deleted from `Sheet1`, with no blank rows left.
 - Credentials: `GSheetStore` now uses `GOOGLE_CREDS_JSON` (key content) when set, otherwise the local key file, so it works in GitHub Actions without a file. `Updateshipments.py` still uses the file only.
-- GitHub Actions (`.github/workflows/run-script.yml`, scheduled + manual): the workflow installs requirements, then runs `playwright install --with-deps chromium` (without it Chromium is missing and `launch` fails). When `GITHUB_ACTIONS=true` the script runs once and exits instead of polling hourly (otherwise the job would sleep until the 30-min timeout). The workflow maps the `GOOGLE_CREDS_JSON` secret to the env var of the same name. Secrets used: `GOOGLE_CREDS_JSON`, `DRY_RUN`, `WA_TOKEN`, `WA_PHONE_NUMBER_ID`. The workflow also passes a `SHEET_ID` secret, but the script ignores it (hard-coded constant).
+- GitHub Actions (`.github/workflows/run-script.yml`, scheduled + manual): the workflow installs requirements, then runs `playwright install --with-deps chromium` (without it Chromium is missing and `launch` fails). The script always runs once and exits (no poll loop). The workflow maps the `GOOGLE_CREDS_JSON` secret to the env var of the same name. Secrets used: `GOOGLE_CREDS_JSON`, `DRY_RUN`, `WA_TOKEN`, `WA_PHONE_NUMBER_ID`. The workflow also passes a `SHEET_ID` secret, but the script ignores it (hard-coded constant).
 - Workflow schedule (2026-10-04): the 10:30 IST run did not trigger on schedule, most likely GitHub delaying or dropping runs at busy `:00`/`:30` minutes. Crons moved to odd minutes: `7 5,10` and `37 7,13` (UTC) = 10:37, 15:37, 13:07 and 19:07 IST. Scheduled runs only fire from the default branch and can still be delayed by 10–60 min.
 - `DRY_RUN` is no longer hard-coded; it is read from the `DRY_RUN` env var or `.env` (default off).
 - Scraped `location` now has newlines and repeated whitespace collapsed to single spaces before it is written (applied right after the scrape in `run()`). Remark/status are unchanged.
