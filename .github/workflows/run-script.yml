@@ -3,9 +3,8 @@ name: Scrape and update sheet
 on:
   workflow_dispatch:
   schedule:
-    - cron: "17 5,10 * * *"    # 10:47, 15:47 IST (off the busy :00/:30 minutes)
-    - cron: "37 7,13 * * *"   # 13:07, 19:07 IST
-
+    - cron: "07 5,7,10,13 * * *"    # 10:47, 15:47 IST (off the busy :00/:30 minutes)
+    
 concurrency:
   group: scrape
   cancel-in-progress: false     # never overlap two runs
